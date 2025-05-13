@@ -69,6 +69,20 @@ if st.button("📆 Generate 3-Month Schedule"):
     df = pd.DataFrame(schedule)
     st.success("✅ Here's your cultivation and harvest schedule:")
     st.dataframe(df)
+    # Calculate and show per-bag yield info
+per_bag_yield = bag_weight * data["yield_percents"][0]
+total_yield = per_bag_yield * num_bags
+
+st.markdown(
+    f"📦 **Each bag yields:** {per_bag_yield:.2f} kg per flush  \n"
+    f"📈 **Total per harvest:** {per_bag_yield:.2f} kg × {num_bags} bags = {total_yield:.2f} kg"
+)
+# Calculate cumulative yield
+df["Cumulative Yield (kg)"] = df["Expected Yield (kg)"].cumsum()
+
+# Show chart
+st.subheader("📊 Cumulative Yield Over Time")
+st.line_chart(df.set_index("Harvest Date")["Cumulative Yield (kg)"])
 
     csv = df.to_csv(index=False).encode('utf-8')
     st.download_button("📥 Download as CSV", csv, "mushroom_schedule.csv", "text/csv")
