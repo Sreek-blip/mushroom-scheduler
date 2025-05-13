@@ -84,5 +84,5 @@ df["Cumulative Yield (kg)"] = df["Expected Yield (kg)"].cumsum()
 st.subheader("📊 Cumulative Yield Over Time")
 st.line_chart(df.set_index("Harvest Date")["Cumulative Yield (kg)"])
 
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download as CSV", csv, "mushroom_schedule.csv", "text/csv")
+csv = df.to_csv(index=False).encode('utf-8')
+st.download_button("📥 Download as CSV", csv, "mushroom_schedule.csv", "text/csv")
