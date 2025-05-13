@@ -2,90 +2,97 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
+st.set_page_config(page_title="Mushroom Cultivation Scheduler", layout="centered")
 st.title("🍄 Nuvedo Mushroom Cultivation Scheduler")
 
-# Species-specific parameters
-species_data = {
+# Species configuration
+default_species_data = {
     "Lion's Mane": {
-        "colonization_days": 28,
-        "first_harvest_week": 2,
-        "flush_interval_weeks": 2,
-        "flushes": 4,
-        "yield_percents": [0.11, 0.11, 0.11, 0.11]
+        "flush_weeks": [2, 4, 6, 8],
+        "default_BE": [0.12, 0.11, 0.10, 0.09]
     },
     "Shiitake": {
-        "colonization_days": 97,
-        "first_harvest_offset_days": 14,
-        "flush_interval_days": 14,
-        "flushes": 2,
-        "yield_percents": [0.15, 0.15]
+        "flush_weeks": [15, 17],  # 97 days colonization + 14 + 14 days
+        "default_BE": [0.15, 0.15]
     },
     "Reishi": {
-        "colonization_days": 28,
-        "first_harvest_week": 3,
-        "flush_interval_weeks": 3,
-        "flushes": 3,
-        "yield_percents": [0.07, 0.07, 0.07]
+        "flush_weeks": [3, 6, 9],
+        "default_BE": [0.07, 0.07, 0.07]
     }
 }
 
-# Inputs
-species = st.selectbox("🍄 Select Mushroom Species", list(species_data.keys()))
+# ----------------------
+# User Inputs
+# ----------------------
+species = st.selectbox("🍄 Select Mushroom Species", list(default_species_data.keys()))
 num_bags = st.number_input("🔢 Number of Fruiting Bags", min_value=1, value=10)
-bag_weight = st.number_input("⚖️ Weight per Bag (kg)", min_value=0.1, step=0.1, value=1.0)
+dry_weight_per_bag = st.number_input("⚖️ Dry Weight per Bag (kg)", min_value=0.1, step=0.1, value=1.0)
 start_date = st.date_input("📅 Inoculation Start Date", datetime.today())
 
+species_config = default_species_data[species]
+flush_weeks = species_config["flush_weeks"]
+default_BE = species_config["default_BE"]
+
+st.markdown("🧪 **Enter B.E. (Biological Efficiency) per flush:**")
+custom_be = []
+for i, week in enumerate(flush_weeks):
+    be = st.number_input(
+        f"Flush in Week {week}",
+        min_value=0.01,
+        max_value=1.0,
+        step=0.01,
+        value=float(default_BE[i]),
+        key=f"be_week_{week}"
+    )
+    custom_be.append(be)
+
+# ----------------------
+# Generate Schedule
+# ----------------------
 if st.button("📆 Generate 3-Month Schedule"):
-    total_substrate = num_bags * bag_weight
+    total_dry_weight = num_bags * dry_weight_per_bag
     schedule = []
 
-    # Fetch species parameters
-    data = species_data[species]
+    for i, week in enumerate(flush_weeks):
+        flush_date = start_date + timedelta(weeks=week - 1)
+        be = custom_be[i]
+        fresh_weight = total_dry_weight * be  # BE is a fraction
+        schedule.append({
+            "Week": f"Week {week}",
+            "Harvest Week": week,
+            "Harvest Date": flush_date.strftime("%Y-%m-%d"),
+            "BE (%)": round(be * 100, 1),
+            "Fresh Yield (kg)": round(fresh_weight, 2),
+            "Month": ((flush_date - start_date).days // 30) + 1
+        })
 
-    # Create harvest schedule
-    if species == "Shiitake":
-        colonization_complete = start_date + timedelta(days=data["colonization_days"])
-        for i in range(data["flushes"]):
-            flush_date = colonization_complete + timedelta(
-                days=data["first_harvest_offset_days"] + i * data["flush_interval_days"]
-            )
-            week_num = ((flush_date - start_date).days // 7) + 1
-            yield_kg = round(total_substrate * data["yield_percents"][i], 2)
-            schedule.append({
-                "Week": f"Week {week_num}",
-                "Harvest Date": flush_date.strftime("%Y-%m-%d"),
-                "Expected Yield (kg)": yield_kg
-            })
-
-    else:
-        for i in range(data["flushes"]):
-            flush_week = data["first_harvest_week"] + (i * data["flush_interval_weeks"])
-            flush_date = start_date + timedelta(weeks=flush_week - 1)
-            yield_kg = round(total_substrate * data["yield_percents"][i], 2)
-            schedule.append({
-                "Week": f"Week {flush_week}",
-                "Harvest Date": flush_date.strftime("%Y-%m-%d"),
-                "Expected Yield (kg)": yield_kg
-            })
-
-    # Display table
     df = pd.DataFrame(schedule)
-    st.success("✅ Here's your cultivation and harvest schedule:")
-    st.dataframe(df)
 
-    # Yield breakdown
-    per_bag_yield = bag_weight * data["yield_percents"][0]
-    total_yield = per_bag_yield * num_bags
+    # Display yield summary
+    st.success("✅ Here's your cultivation and harvest schedule:")
+    st.dataframe(df[["Week", "Harvest Date", "BE (%)", "Fresh Yield (kg)"]])
+
+    # Yield summary
+    per_bag_yield = dry_weight_per_bag * custom_be[0]
+    total_per_flush = per_bag_yield * num_bags
     st.markdown(
-        f"📦 **Each bag yields:** {per_bag_yield:.2f} kg per flush  \n"
-        f"📈 **Total per harvest:** {per_bag_yield:.2f} kg × {num_bags} bags = {total_yield:.2f} kg"
+        f"📦 **Each bag yields ~ {per_bag_yield:.2f} kg fresh mushrooms per flush**  \n"
+        f"📈 **Total per flush:** {total_per_flush:.2f} kg (× {num_bags} bags)"
     )
 
-    # Cumulative yield chart
-    df["Cumulative Yield (kg)"] = df["Expected Yield (kg)"].cumsum()
-    st.subheader("📊 Cumulative Yield Over Time")
-    st.line_chart(df.set_index("Harvest Date")["Cumulative Yield (kg)"])
+    # ----------------------
+    # Charts
+    # ----------------------
+    st.subheader("📊 Weekly Fresh Yield")
+    st.bar_chart(df.set_index("Week")["Fresh Yield (kg)"])
 
-    # CSV download
+    # Monthly yield
+    st.subheader("📅 Monthly Yield Summary")
+    monthly = df.groupby("Month")["Fresh Yield (kg)"].sum().reset_index()
+    st.dataframe(monthly)
+
+    # ----------------------
+    # CSV Download
+    # ----------------------
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download as CSV", csv, "mushroom_schedule.csv", "text/csv")
+    st.download_button("📥 Download Full Schedule as CSV", csv, "mushroom_schedule.csv", "text/csv")
