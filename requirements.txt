@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+httpx
+python-dotenv
+openai
+pandas
+facebook-business
+google-auth
+gspread
+streamlit
