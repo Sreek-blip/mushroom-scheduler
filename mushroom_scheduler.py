@@ -1,98 +1,135 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import math
+import gspread
+from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Mushroom Cultivation Scheduler", layout="centered")
-st.title("🍄 Nuvedo Mushroom Cultivation Scheduler")
-
-# Species configuration
-default_species_data = {
+# Species-specific parameters
+species_params = {
     "Lion's Mane": {
-        "flush_weeks": [2, 4, 6, 8],
-        "default_BE": [0.12, 0.11, 0.10, 0.09]
+        "yield_per_flush_per_kg_substrate": [0.3, 0.25, 0.2],
+        "colonization_days": 14,
+        "fruiting_days": 7,
+        "substrate_type": "Hardwood Sawdust",
+        "spawn_ratio": 0.05
     },
-    "Shiitake": {
-        "flush_weeks": [15, 17],  # 97 days colonization + 14 + 14 days
-        "default_BE": [0.15, 0.15]
+    "Oyster": {
+        "yield_per_flush_per_kg_substrate": [0.4, 0.3, 0.2],
+        "colonization_days": 10,
+        "fruiting_days": 5,
+        "substrate_type": "Wheat Straw",
+        "spawn_ratio": 0.04
     },
     "Reishi": {
-        "flush_weeks": [3, 6, 9],
-        "default_BE": [0.07, 0.07, 0.07]
+        "yield_per_flush_per_kg_substrate": [0.25, 0.2],
+        "colonization_days": 30,
+        "fruiting_days": 30,
+        "substrate_type": "Hardwood Sawdust",
+        "spawn_ratio": 0.03
     }
 }
 
-# ----------------------
-# User Inputs
-# ----------------------
-species = st.selectbox("🍄 Select Mushroom Species", list(default_species_data.keys()))
-num_bags = st.number_input("🔢 Number of Fruiting Bags", min_value=1, value=10)
-dry_weight_per_bag = st.number_input("⚖️ Dry Weight per Bag (kg)", min_value=0.1, step=0.1, value=1.0)
-start_date = st.date_input("📅 Inoculation Start Date", datetime.today())
+st.set_page_config(page_title="Mushroom Scheduler", layout="centered")
+st.title("🍄 Mushroom Cultivation Planner & Logger")
 
-species_config = default_species_data[species]
-flush_weeks = species_config["flush_weeks"]
-default_BE = species_config["default_BE"]
+mode = st.radio("Select Mode", ["📅 Plan Backward from Final Harvest", "📝 Log Actual Cultivation Data"])
 
-st.markdown("🧪 **Enter B.E. (Biological Efficiency) per flush:**")
-custom_be = []
-for i, week in enumerate(flush_weeks):
-    be = st.number_input(
-        f"Flush in Week {week}",
-        min_value=0.01,
-        max_value=1.0,
-        step=0.01,
-        value=float(default_BE[i]),
-        key=f"be_week_{week}"
+# Function to log to Google Sheet
+def append_to_google_sheet(data: pd.DataFrame):
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive"
+        ]
     )
-    custom_be.append(be)
+    client = gspread.authorize(creds)
+    sheet = client.open("Nuvedo Cultivation Log").sheet1
+    sheet.append_rows(data.values.tolist(), value_input_option="USER_ENTERED")
 
-# ----------------------
-# Generate Schedule
-# ----------------------
-if st.button("📆 Generate 3-Month Schedule"):
-    total_dry_weight = num_bags * dry_weight_per_bag
-    schedule = []
+if mode == "📅 Plan Backward from Final Harvest":
+    species = st.selectbox("Select Mushroom Species", list(species_params.keys()))
+    total_yield = st.number_input("Total Yield Required (kg)", min_value=0.0, value=10.0, step=0.1)
+    flushes = st.selectbox("Number of Flushes", [1, 2, 3])
+    final_harvest_date = st.date_input("Final Harvest Date", datetime.today())
+    batch_number = st.text_input("Batch / Lot Number")
 
-    for i, week in enumerate(flush_weeks):
-        flush_date = start_date + timedelta(weeks=week - 1)
-        be = custom_be[i]
-        fresh_weight = total_dry_weight * be  # BE is a fraction
-        schedule.append({
-            "Week": f"Week {week}",
-            "Harvest Week": week,
-            "Harvest Date": flush_date.strftime("%Y-%m-%d"),
-            "BE (%)": round(be * 100, 1),
-            "Fresh Yield (kg)": round(fresh_weight, 2),
-            "Month": ((flush_date - start_date).days // 30) + 1
-        })
+    if st.button("Generate Plan"):
+        params = species_params[species]
+        yield_per_kg_sub = sum(params['yield_per_flush_per_kg_substrate'][:flushes])
 
-    df = pd.DataFrame(schedule)
+        substrate_needed_kg = total_yield / yield_per_kg_sub
+        spawn_needed_kg = substrate_needed_kg * params['spawn_ratio']
+        kits_required = math.ceil(substrate_needed_kg)
 
-    # Display yield summary
-    st.success("✅ Here's your cultivation and harvest schedule:")
-    st.dataframe(df[["Week", "Harvest Date", "BE (%)", "Fresh Yield (kg)"]])
+        total_days = params['colonization_days'] + (params['fruiting_days'] * flushes)
+        inoculation_date = final_harvest_date - timedelta(days=total_days)
+        spawn_prep_date = inoculation_date - timedelta(days=2)
 
-    # Yield summary
-    per_bag_yield = dry_weight_per_bag * custom_be[0]
-    total_per_flush = per_bag_yield * num_bags
-    st.markdown(
-        f"📦 **Each bag yields ~ {per_bag_yield:.2f} kg fresh mushrooms per flush**  \n"
-        f"📈 **Total per flush:** {total_per_flush:.2f} kg (× {num_bags} bags)"
-    )
+        harvest_schedule = []
+        harvest_date = inoculation_date + timedelta(days=params['colonization_days'] + params['fruiting_days'])
+        flush_yields = [round(y * substrate_needed_kg, 2) for y in params['yield_per_flush_per_kg_substrate'][:flushes]]
 
-    # ----------------------
-    # Charts
-    # ----------------------
-    st.subheader("📊 Weekly Fresh Yield")
-    st.bar_chart(df.set_index("Week")["Fresh Yield (kg)"])
+        for i, flush_yield in enumerate(flush_yields):
+            harvest_schedule.append({
+                "Batch Number": batch_number,
+                "Species": species,
+                "Flush": i + 1,
+                "Harvest Date": harvest_date.strftime("%Y-%m-%d"),
+                "Expected Yield (kg)": flush_yield,
+                "B.E. (%)": round((flush_yield / substrate_needed_kg) * 100, 2)
+            })
+            harvest_date += timedelta(days=params['fruiting_days'])
 
-    # Monthly yield
-    st.subheader("📅 Monthly Yield Summary")
-    monthly = df.groupby("Month")["Fresh Yield (kg)"].sum().reset_index()
-    st.dataframe(monthly)
+        be_percentage = round((total_yield / substrate_needed_kg) * 100, 2)
 
-    # ----------------------
-    # CSV Download
-    # ----------------------
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download Full Schedule as CSV", csv, "mushroom_schedule.csv", "text/csv")
+        st.subheader("🧾 Summary")
+        st.write(f"**Batch Number**: {batch_number}")
+        st.write(f"**Species**: {species}")
+        st.write(f"**Kits Required**: {kits_required}")
+        st.write(f"**Substrate Type**: {params['substrate_type']}")
+        st.write(f"**Substrate Required**: {round(substrate_needed_kg, 2)} kg (dry)")
+        st.write(f"**Spawn Required**: {round(spawn_needed_kg * 1000)} g ({round(spawn_needed_kg, 2)} kg)")
+        st.write(f"**Spawn Preparation Date**: {spawn_prep_date.strftime('%Y-%m-%d')}")
+        st.write(f"**Inoculation Date**: {inoculation_date.strftime('%Y-%m-%d')}")
+        st.write(f"**Final Harvest Date**: {final_harvest_date.strftime('%Y-%m-%d')}")
+        st.write(f"**Biological Efficiency**: {be_percentage} %")
+
+        df_schedule = pd.DataFrame(harvest_schedule)
+        st.subheader("📆 Harvesting Schedule")
+        st.dataframe(df_schedule)
+
+        if st.button("📤 Sync to Google Sheets"):
+            append_to_google_sheet(df_schedule)
+            st.success("Data synced to Google Sheets ✅")
+
+        st.download_button("📥 Download CSV", df_schedule.to_csv(index=False), file_name=f"{batch_number}_harvest_schedule.csv")
+
+elif mode == "📝 Log Actual Cultivation Data":
+    st.subheader("🧾 Enter Completed Batch Data")
+
+    with st.form("log_form"):
+        batch = st.text_input("Batch Number")
+        species = st.selectbox("Species", list(species_params.keys()), key="log_species")
+        harvest_date = st.date_input("Harvest Date")
+        flush_number = st.number_input("Flush Number", min_value=1, step=1)
+        dry_substrate = st.number_input("Dry Substrate Used (kg)", min_value=0.1)
+        harvested_kg = st.number_input("Actual Harvested Yield (kg)", min_value=0.1)
+
+        submitted = st.form_submit_button("Log Entry")
+
+    if submitted:
+        be_actual = round((harvested_kg / dry_substrate) * 100, 2)
+        row = pd.DataFrame([{
+            "Batch Number": batch,
+            "Species": species,
+            "Flush": flush_number,
+            "Harvest Date": harvest_date.strftime("%Y-%m-%d"),
+            "Expected Yield (kg)": harvested_kg,
+            "B.E. (%)": be_actual
+        }])
+
+        append_to_google_sheet(row)
+        st.success("✅ Data logged and synced to Google Sheets")
+        st.dataframe(row)
